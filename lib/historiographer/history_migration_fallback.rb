@@ -1,6 +1,6 @@
 module Historiographer
-  module HistoryMigrationMysql
-    #
+  module HistoryMigrationFallback
+    # Fallback for MySql & Oracle
     # class CreateAdGroupHistories < ActiveRecord::Migration
     #  def change
     #    create_table :ad_group_histories do |t|
