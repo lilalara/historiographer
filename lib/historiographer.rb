@@ -100,26 +100,35 @@ module Historiographer
       end
     end
 
-    alias_method :destroy_without_history, :destroy
+    def destroy(history_user_id: nil, with_history: true)
+      if with_history
+        history_user_id = history_user_id || get_history_user_id
+        history_user_absent_action if history_user_id.nil?
 
-    def destroy_with_history(history_user_id: nil)
-      history_user_absent_action if history_user_id.nil?
+        current_history = histories.where(history_ended_at: nil).order('id desc').limit(1).last
+        current_history.update_columns(history_ended_at: UTC.now) if current_history.present?
 
-      current_history = histories.where(history_ended_at: nil).order('id desc').limit(1).last
-      current_history.update_columns(history_ended_at: UTC.now) if current_history.present?
+        record_history(flag_destroyed: true) if Configuration.store_destroyed_record
 
-      if respond_to?(:paranoia_destroy)
-        self.history_user_id = history_user_id
-        paranoia_destroy
+        if respond_to?(:paranoia_destroy)
+          self.history_user_id = history_user_id
+          paranoia_destroy
+        else
+          @no_history = true
+          destroy(with_history: false)
+          @no_history = false
+        end
+        true
       else
-        @no_history = true
-        destroy_without_history
-        @no_history = false
+        super()
       end
-      true
     end
 
-    alias_method :destroy, :destroy_with_history
+    def destroy_without_history
+      destroy(with_history: false)
+    end
+
+    alias_method :destroy_with_history, :destroy
 
     def assign_attributes(new_attributes)
       huid = new_attributes[:history_user_id]
@@ -177,7 +186,7 @@ module Historiographer
       if is_history_class?
         read_attribute(:history_user_id)
       else
-        @history_user_id
+        @history_user_id.nil? ? get_history_user_id : @history_user_id
       end
     end
 
@@ -266,7 +275,7 @@ module Historiographer
       end
     end
 
-    base.send(:prepend, UpdateColumnsWithHistory)
+    base.send(:prepend, UpdateColumnsWithHistory) if Historiographer::Configuration.store_indirect_update
 
     def save_without_history(*args, &block)
       @no_history = true
@@ -364,6 +373,10 @@ module Historiographer
 
     private
 
+    def get_history_user_id
+      Historiographer::Configuration.user_method.present? ? send(Historiographer::Configuration.user_method) : nil
+    end
+
     def history_user_absent_action
       raise HistoryUserIdMissingError, 'history_user_id must be passed in order to save record with histories! If you are in a context with no history_user_id, explicitly call #save_without_user'
     end
@@ -374,16 +387,20 @@ module Historiographer
     #
     # Find the most recent history, and update its history_ended_at timestamp
     #
-    def record_history(snapshot_id: nil)
+    def record_history(snapshot_id: nil, flag_destroyed: false)
       history_user_absent_action if history_user_id.nil? && should_alert_history_user_id_present?
 
       now = UTC.now
       attrs = history_attrs(snapshot_id: snapshot_id, now: now)
       current_history = histories.where(history_ended_at: nil).order('id desc').limit(1).last
 
+      if flag_destroyed && history_class.column_names.include?("history_record_deleted")
+        attrs.merge!(history_record_deleted: true)
+      end
+
       if history_class.history_foreign_key.present? && history_class.present?
         if defined?(ActiveRecord::ConnectionAdapters::OracleEnhanced)
-          # Oracle Enhanced gem does not support insert_all
+          # Oracle Enhanced gem does not support skip_dublicates within insert_all
           instance = history_class.new(attrs)
           unless instance.save
             return check_duplicate_history(attrs)
@@ -394,9 +411,10 @@ module Historiographer
           if result.rows.empty?
             # insert_all returned empty rows, likely due to a duplicate/conflict
             return check_duplicate_history(attrs)
+          else
+            inserted_id = result.rows.first.first if history_class.primary_key == 'id'
+            instance = history_class.find(inserted_id)
           end
-          inserted_id = result.rows.first.first if history_class.primary_key == 'id'
-          instance = history_class.find(inserted_id)
         end
         current_history.update_columns(history_ended_at: now) if current_history.present?
         instance

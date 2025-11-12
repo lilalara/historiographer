@@ -110,7 +110,7 @@ module Historiographer
       # Set up user association unless Silent module is included
       # Defer this check until foreign_class is available
       unless base.foreign_class && base.foreign_class.ancestors.include?(Historiographer::Silent)
-        belongs_to :user, foreign_key: :history_user_id
+        belongs_to :user, foreign_key: :history_user_id, class_name: Historiographer::Configuration.user_class
       end
 
       # Add method_added hook to the original class when it's available
@@ -254,6 +254,20 @@ module Historiographer
         else
           super(*args, **kwargs)
         end
+      end
+
+      def restore(with_validation: true)
+        history_user_absent_action if history_user_id.nil?
+
+        attrs = original_class.column_names - ["id"] - Historiographer::Configuration.ignored_attr
+        org_id = self.send(self.class.history_foreign_key)
+        restored_obj = original_class.find_or_initialize_by(id: org_id)
+        restored_obj.assign_attributes(attributes.extract!(*attrs))
+        restored_obj.save_without_history(validate: with_validation)
+        return false unless restored_obj.saved_changes?
+        current_history = restored_obj.histories.where(history_ended_at: nil).order('id desc').limit(1).last
+        current_history.update_columns(history_user_id: history_user_id, history_ended_at: UTC.now) if current_history.present?
+        update_columns(history_user_id: history_user_id, history_ended_at: nil)
       end
 
       # Returns the most recent snapshot for each snapshot_id

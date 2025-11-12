@@ -11,7 +11,7 @@ module Historiographer
     end
 
     def update_all(updates, histories=true)
-      if !histories || self.model.is_history_class?
+      if !histories || self.model.is_history_class? || !Configuration.store_indirect_update
         super(updates)
       else
         updates.symbolize_keys!
@@ -52,7 +52,7 @@ module Historiographer
     end
 
     def delete_all(options={}, histories=true)
-      unless histories
+      unless histories && Configuration.store_indirect_update
         super()
       else
         ActiveRecord::Base.transaction do

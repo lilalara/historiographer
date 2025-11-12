@@ -21,6 +21,7 @@ module Historiographer
       history_table_name = self.name
       original_table_name = history_table_name.gsub(/_histories$/) {}.pluralize
       foreign_key ||= original_table_name.singularize.foreign_key
+      except += Historiographer::Configuration.ignored_attr
 
       class_definer = Class.new(ActiveRecord::Base) do
       end
@@ -44,6 +45,8 @@ module Historiographer
           send(column.type, column.name, opts)
         end
       end
+
+      send(:boolean, :history_record_deleted, default: false) if Historiographer::Configuration.store_destroyed_record
 
       datetime :history_started_at, null: false
       datetime :history_ended_at
