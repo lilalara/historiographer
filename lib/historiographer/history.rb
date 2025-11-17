@@ -256,6 +256,21 @@ module Historiographer
         end
       end
 
+      # Restores a history entry and sets it as the actual version
+      def restore(history_user_id: nil, with_validation: true)
+        history_user_absent_action if history_user_id.nil?
+
+        attrs = original_class.column_names - ["id"]
+        org_id = self.send(self.class.history_foreign_key)
+        restored_obj = original_class.find_or_initialize_by(id: org_id)
+        restored_obj.assign_attributes(attributes.extract!(*attrs))
+        restored_obj.save_without_history(validate: with_validation)
+        return false unless restored_obj.saved_changes?
+        current_history = restored_obj.histories.where(history_ended_at: nil).order('id desc').limit(1).last
+        current_history.update_columns(history_user_id: history_user_id, history_ended_at: UTC.now) if current_history.present?
+        update_columns(history_user_id: history_user_id, history_ended_at: nil)
+      end
+
       # Returns the most recent snapshot for each snapshot_id
       # Orders by history_started_at and id to handle cases where multiple records
       # have the same history_started_at timestamp
